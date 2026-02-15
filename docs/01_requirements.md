@@ -56,6 +56,7 @@
 - Metrics collection (latency, error rate)
 - Clear failure detection strategy
 
+Observability is included to ensure the system can be operated and monitored in production environments.
 ---
 
 ## 3️⃣ Assumptions
