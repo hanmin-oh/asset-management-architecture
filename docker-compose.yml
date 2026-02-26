@@ -1,0 +1,88 @@
+version: '3.8'  # Docker Compose 파일 버전
+
+services:
+  # 1. PostgreSQL (db)
+  # 사용자 자산과 트랜잭션의 원천 데이터 저장소입니다.
+  db:
+    image: postgres:15-alpine  # 가볍고 안정적인 Alpine 리눅스 기반의 PostgreSQL 15 이미지 사용
+    platform: linux/arm64      # Apple Silicon (M1/M2) 칩셋 호환성을 위해 명시
+    container_name: asset_db   # 컨테이너 이름을 고정하여 관리 용이하게 함
+    restart: always            # 컨테이너가 중지되면 자동으로 재시작
+    ports:
+      - "5432:5432"            # 호스트의 5432 포트를 컨테이너의 5432 포트와 연결 (외부 접속용)
+    environment:
+      POSTGRES_USER: user      # 데이터베이스 접속 사용자 ID
+      POSTGRES_PASSWORD: password # 데이터베이스 접속 비밀번호 (개발용)
+      POSTGRES_DB: asset_db    # 초기 생성할 데이터베이스 이름
+    volumes:
+      - postgres_data:/var/lib/postgresql/data # 데이터 영속성을 위해 도커 볼륨에 데이터 저장 (컨테이너 삭제돼도 데이터 유지)
+    networks:
+      - asset_network          # asset_network 네트워크에 연결하여 다른 서비스와 통신
+
+  # 2. Elasticsearch (search)
+  # 대량의 거래 내역 검색 및 기술적 지표 분석용 검색 엔진입니다.
+  search:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9 # 안정적인 7.x 버전 사용 (8.x는 설정이 더 복잡할 수 있음)
+    platform: linux/arm64
+    container_name: asset_search
+    environment:
+      - discovery.type=single-node # 클러스터가 아닌 단일 노드로 실행 (개발 환경용)
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m" # JVM 힙 메모리 크기 제한 (로컬 리소스 절약)
+    ports:
+      - "9200:9200"            # HTTP REST API 포트
+      - "9300:9300"            # 노드 간 통신 포트
+    volumes:
+      - es_data:/usr/share/elasticsearch/data # 인덱스 데이터 영속성 보장
+    networks:
+      - asset_network
+
+  # 3. Redis (cache)
+  # API 성능 최적화를 위한 인메모리 캐싱 레이어입니다.
+  cache:
+    image: redis:7-alpine      # 가벼운 Alpine 기반 Redis 7 이미지
+    platform: linux/arm64
+    container_name: asset_cache
+    ports:
+      - "6379:6379"            # Redis 기본 포트
+    networks:
+      - asset_network
+
+  # 4. Golang App (app)
+  # 메인 백엔드 서비스입니다. 개발 편의를 위해 Air(Hot Reload)를 사용합니다.
+  app:
+    image: cosmtrek/air        # Go Hot Reload 도구인 Air가 포함된 이미지 사용
+    platform: linux/arm64
+    container_name: asset_app
+    working_dir: /app          # 컨테이너 내부 작업 디렉토리 설정
+    volumes:
+      - ./:/app                # 현재 프로젝트 폴더를 컨테이너의 /app에 마운트 (코드 수정 시 즉시 반영)
+    ports:
+      - "8080:8080"            # 웹 서버 포트 (Go 앱이 8080에서 실행된다고 가정)
+    environment:
+      - DB_HOST=db             # DB 서비스 이름으로 접속 (Docker DNS가 해석)
+      - DB_PORT=5432
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_NAME=asset_db
+      - REDIS_HOST=cache       # Redis 서비스 이름으로 접속
+      - REDIS_PORT=6379
+      - ES_HOST=search         # Elasticsearch 서비스 이름으로 접속
+      - ES_PORT=9200
+    depends_on:                # 다른 서비스들이 먼저 실행된 후 앱이 실행되도록 순서 보장
+      - db
+      - search
+      - cache
+    networks:
+      - asset_network
+
+# 네트워크 정의
+# 서비스들이 서로 호스트네임(서비스명)으로 통신할 수 있게 해주는 가상 네트워크
+networks:
+  asset_network:
+    driver: bridge
+
+# 볼륨 정의
+# 컨테이너가 삭제되어도 데이터가 사라지지 않도록 호스트에 저장하는 공간
+volumes:
+  postgres_data:
+  es_data:
